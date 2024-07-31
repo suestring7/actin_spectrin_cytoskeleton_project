@@ -31,6 +31,7 @@ import pointpats
 from render2D import grid2D
 
 
+## 1D Functions
 def iFFT(ft):
     ft = np.fft.ifftshift(ft)
     ift = np.fft.ifft2(ft)
@@ -297,11 +298,12 @@ def simRand(size=128, n=50):
     return np.random.randint(size, size=(n, 2))
 
 
-def simRand2(size=128, n=50, d=187):
+def simRand2(size=128, n=50, thre=[187, 187]):
     sim = np.random.randint(size, size=(int(n / 2), 2))
     sim2 = []
     for x in sim:
         theta = np.random.rand() * 2 * np.pi
+        d = np.random.rand() * (thre[1] - thre[0]) + thre[0]
         new_vx = [x[0] + d * np.cos(theta), x[1] + d * np.sin(theta)]
         while new_vx[0] < 0 or new_vx[0] > size or new_vx[1] < 0 or new_vx[1] > size:
             theta = np.random.rand() * 2 * np.pi
@@ -670,7 +672,9 @@ def autocontrast(img, thre=5):
     return img.astype(np.uint8)
 
 
-def lmax_loc(loc_file, regions, rimg, adapt=55, local=7, plot=0, verbose=0, sm=4):
+def lmax_loc(
+    loc_file, regions, rimg, adapt=55, local=7, plot=0, verbose=0, sm=4, mode="full"
+):
     if loc_file is not None:
         smlm = pd.read_table(loc_file, header=0)
         test = smlm[["Xc", "Yc", "Zc"]]
@@ -743,7 +747,29 @@ def lmax_loc(loc_file, regions, rimg, adapt=55, local=7, plot=0, verbose=0, sm=4
     #     markerfacecolor="purple",
     #     markersize=10,
     # )
-    return blur, contour_centers
+
+    # use watershed to do simple segmentation and cal the size std
+    sure_fg = lmax
+    sure_bg = th2
+    _, markers = cv2.connectedComponents(sure_fg)
+    
+    markers = markers+1
+    unknown = cv2.subtract(sure_bg,sure_fg)
+
+    markers[unknown==255] = 0
+    oimg = autocontrast(img.T)
+    oimg = cv2.merge([oimg,oimg,oimg])
+    markers = cv2.watershed(oimg,markers)
+    _, cnts = np.unique(markers,return_counts=True)
+    if mode == "full":
+        return (
+            blur,
+            contour_centers,
+            np.std([rimg[int(x[1])][int(x[0])] for x in contour_centers]),
+            np.std(cnts[1:]),
+        )
+    else:
+        return blur, contour_centers
 
 
 def dbscan(loc_file, regions, rimg, min_c=10, max_c=100):
@@ -902,7 +928,7 @@ def getTrianglesFromList(link_list):
     return tri_list
 
 
-def visualize(vxs, links, p_size, thre, bins=10, **plot_args):
+def visualize(vxs, links, p_size, thre, bins=10, text=0, **plot_args):
     fig = plt.gcf()  # setup the plot
     x_offset = 2
     y_offset = 1
@@ -931,23 +957,25 @@ def visualize(vxs, links, p_size, thre, bins=10, **plot_args):
                     c=cmap(int((dist[i][j] - thre[0]) / 10)),
                     **plot_args,
                 )
-                plt.text(
-                    (vxs[i][0] + vxs[j][0]) / 2 - x_offset,
-                    (vxs[i][1] + vxs[j][1]) / 2 - y_offset,
-                    str(int(dist[i][j])),
-                    color="white",
-                )
+                if text:
+                    plt.text(
+                        (vxs[i][0] + vxs[j][0]) / 2 - x_offset,
+                        (vxs[i][1] + vxs[j][1]) / 2 - y_offset,
+                        str(int(dist[i][j])),
+                        color="white",
+                    )
     plt.gca().invert_yaxis()
-    ax2 = fig.add_axes([0.85, 0.1, 0.03, 0.8])
-    cb = mpl.colorbar.ColorbarBase(
-        ax2,
-        cmap=cmap,
-        norm=norm,
-        spacing="proportional",
-        ticks=bounds,
-        boundaries=bounds,
-        format="%1i",
-    )
+    if text:
+        ax2 = fig.add_axes([0.85, 0.1, 0.03, 0.8])
+        cb = mpl.colorbar.ColorbarBase(
+            ax2,
+            cmap=cmap,
+            norm=norm,
+            spacing="proportional",
+            ticks=bounds,
+            boundaries=bounds,
+            format="%1i",
+        )
     return 1
 
 
@@ -1557,7 +1585,7 @@ def simulateRandomStats(counts, grid_size=64, thre=14, rk_d=20, plot=0):
     return mean_connects, tris, r_k[0]
 
 
-def readVXSfromLoc(loc, grid_size=64, plot=0):
+def readVXSfromLoc(loc, grid_size=64, plot=0, mode="full"):
     smlm = pd.read_csv(loc, header=0)
     xc = np.array(smlm["Xc"].tolist()).astype(np.int32)
     yc = np.array(smlm["Yc"].tolist()).astype(np.int32)
@@ -1574,8 +1602,7 @@ def readVXSfromLoc(loc, grid_size=64, plot=0):
     nimg = scipy.signal.fftconvolve(img, kernel, mode="same")
     if plot == 1:
         plt.imshow(nimg)
-    vxs = lmax_loc(None, None, nimg, adapt=55, local=5, sm=3, plot=0)[1]
-    return vxs
+    return lmax_loc(None, None, nimg, adapt=55, local=5, sm=3, plot=0, mode=mode)[1]
 
 
 ## EM only
@@ -1656,3 +1683,181 @@ def sum_line_cnct(img, p0, p1):
     if max_sum < sum:
         max_sum = sum
     return max_sum
+
+
+## Simulation functions
+def jitter(vxs, rand=0, loss=0, noise=0):
+    if rand:
+        vxs = np.array(
+            [
+                [
+                    x[0] + (np.random.rand() - 0.5) * rand,
+                    x[1] + (np.random.rand() - 0.5) * rand,
+                ]
+                for x in vxs
+            ]
+        )
+    if loss:
+        n_vx = len(vxs)
+        idx = np.random.choice(n_vx, n_vx - loss, replace=False)
+        vxs = vxs[idx]
+    if noise:
+        n_vx = len(vxs)
+        xmax, ymax = np.max(vxs, axis=0)
+        vxs = np.concatenate(
+            (
+                vxs,
+                [
+                    [xmax * np.random.rand(), ymax * np.random.rand()]
+                    for x in range(noise)
+                ],
+            ),
+            axis=0,
+        )
+    return vxs
+
+
+def angle_of_line(xy0, xy1):
+    xy = xy1 - xy0
+    return math.degrees(math.atan2(-xy[1], xy[0]))
+
+
+def getAngle(vxs, links):
+    n_vx = len(vxs)
+    angles = [[] for x in range(n_vx)]
+    for i in range(n_vx):
+        tmp_angles = []
+        for j in range(n_vx):
+            if links[i][j]:
+                tmp_angles.append(angle_of_line(vxs[i], vxs[j]))
+        if tmp_angles:
+            # tmp_angles = np.array(tmp_angles)
+            tmp_angles = np.sort(tmp_angles)
+            tmp = tmp_angles[1:] - tmp_angles[:-1]
+            angles[i] = np.append(tmp, 360 - np.sum(tmp))
+    return angles
+
+
+def plotAngleHist(angles, bins=36, tmax=180):
+    # Fixing random state for reproducibility
+    tmp = []
+    for x in angles:
+        tmp.extend(x)
+    counts = np.histogram(tmp, bins=np.linspace(0, 360, bins + 1))[0]
+    radii = counts / np.sum(counts)
+
+    # Compute pie slices
+    theta = np.linspace(0.0, 2 * np.pi, bins, endpoint=False)
+    width = 2 * np.pi / bins
+    colors = plt.cm.viridis(radii / 10.0)
+
+    ax = plt.subplot(projection="polar")
+    ticks = np.linspace(0, 2 * np.pi, int(bins / 2 + 1))
+    ax.set_xticks(ticks)
+    ax.bar(theta, radii, width=width, bottom=0.0, color=colors, alpha=0.5)
+    ax.set_thetamin(0)
+    ax.set_thetamax(tmax)
+    plt.show()
+
+
+def calAngleDev(angles, dev=60, alim=90):
+    tmp = []
+    for x in angles:
+        tmp.extend(x)
+    devs = [(x - dev) ** 2 for x in tmp if x < alim]
+    return np.mean(devs)
+
+
+def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=0):
+    # use density and connectivity as rules for simulating data
+    # connectivity
+    # uniformity: distance to the mean length
+    # sparsity: percentage of area / Nextra
+    # energy: 1/2*k*deltax^2
+    n_vx = len(vxs)
+    links = generateLinks(vxs, thre=thre, plot=plot)
+    connects = np.mean(np.sum(links, 0))
+    angles = getAngle(vxs, links)
+
+    if mode == 0:
+        return [n_vx, connects]
+
+    tri_list = getTrianglesFromList(convertMatrix2List(links))
+    # t_vxs = getTrianglesCentroid(tri_list, vxs)
+    dist = distance_matrix(vxs, vxs)
+    lengths = [x for x in (links * dist).flatten() if x != 0]
+
+    length_std = np.std(lengths)
+    x0, y0 = np.min(vxs, 0)
+    x1, y1 = np.max(vxs, 0)
+    p_area = AreaCoveredByTriangles(tri_list, vxs) / (y1 - y0) / (x1 - x0)
+    elastic_energy = np.sum([1 / 2 * (x - relaxed_length) ** 2 for x in lengths])
+    dev_60 = calAngleDev(angles, 60)
+    dev_30 = calAngleDev(angles, 30)
+    # v_c = Voronoi_cv(vxs)
+    # v_e = Voronoi_edges(vxs)
+    # tris = len(t_vxs)
+    return [n_vx, connects, length_std, p_area, elastic_energy, dev_60, dev_30]
+
+
+def histLinks(vxs, links, bins):
+    dist = distance_matrix(vxs, vxs)
+    lengths = [x for x in (links * dist).flatten() if x != 0]
+    plt.figure(figsize=[10, 10])
+    # print(lengths)
+    plt.hist(lengths, bins=bins)
+    return lengths
+
+
+def showCorr(stats, labels, method="default"):
+    if len(labels) != len(stats[0]):
+        print("Mismatch between feature numbers and labels")
+        return 0
+    df = pd.DataFrame(stats, columns=labels)
+    if method == "spearman":
+        for x in labels:
+            df[x] = df[x].rank()
+    corr = df.corr()
+    sns.heatmap(corr, cmap="PiYG", annot=True, vmin=-1, vmax=1)
+    # "coolwarm"
+    # corr.style.background_gradient(cmap='coolwarm')
+    return corr
+
+
+def plotSub(sub_path, grid_size=64):
+    smlm = pd.read_csv(sub_path, header=0)
+    xc = np.array(smlm["Xc"].tolist()).astype(np.int32)
+    yc = np.array(smlm["Yc"].tolist()).astype(np.int32)
+    img = grid2D(
+        np.zeros([grid_size, grid_size], dtype=np.int32),
+        xc,
+        yc,
+        grid_size,
+        grid_size,
+        len(xc),
+    )
+    g = cv2.getGaussianKernel(3, sigma=1)
+    kernel = g * g.T
+    nimg = scipy.signal.fftconvolve(img, kernel, mode="same")
+    plt.imshow(nimg)
+
+
+def visualizeSub(loc, thre):
+    vxs = readVXSfromLoc(loc)
+    links = generateLinks(vxs * 16, thre=thre, plot=0)
+    visualize(vxs, links, thre=thre, p_size=1)
+
+
+def plotSubs(subs, thre, n_x=5):
+    n_subs = len(subs)
+    n_x = 5
+    n_y = round(n_subs / n_x)
+    plt.figure(figsize=(n_x * 2, n_y * 2))
+    # _, axs = plt.subplots(n_y, n_x, figsize=(n_x, n_y))
+    for i in range(n_subs):
+        plt.subplot(n_y, n_x, i + 1)
+        plotSub(subs[i])
+        plt.gca().invert_yaxis()
+        plt.xticks([], [])
+        plt.yticks([], [])
+        visualizeSub(subs[i], thre=thre)
