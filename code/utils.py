@@ -752,15 +752,15 @@ def lmax_loc(
     sure_fg = lmax
     sure_bg = th2
     _, markers = cv2.connectedComponents(sure_fg)
-    
-    markers = markers+1
-    unknown = cv2.subtract(sure_bg,sure_fg)
 
-    markers[unknown==255] = 0
+    markers = markers + 1
+    unknown = cv2.subtract(sure_bg, sure_fg)
+
+    markers[unknown == 255] = 0
     oimg = autocontrast(img.T)
-    oimg = cv2.merge([oimg,oimg,oimg])
-    markers = cv2.watershed(oimg,markers)
-    _, cnts = np.unique(markers,return_counts=True)
+    oimg = cv2.merge([oimg, oimg, oimg])
+    markers = cv2.watershed(oimg, markers)
+    _, cnts = np.unique(markers, return_counts=True)
     if mode == "full":
         return (
             blur,
@@ -1585,6 +1585,28 @@ def simulateRandomStats(counts, grid_size=64, thre=14, rk_d=20, plot=0):
     return mean_connects, tris, r_k[0]
 
 
+def renderImg(img, k_size=3, sigma=1):
+    g = cv2.getGaussianKernel(k_size, sigma=sigma)
+    kernel = g * g.T
+    nimg = scipy.signal.fftconvolve(img, kernel, mode="same")
+    return nimg
+
+
+def readImgfromLoc(loc, grid_size=64, plot=0, sm=3, **render_args):
+    smlm = pd.read_csv(loc, header=0)
+    xc = np.array(smlm["Xc"].tolist()).astype(np.int32)
+    yc = np.array(smlm["Yc"].tolist()).astype(np.int32)
+    img = grid2D(
+        np.zeros([grid_size, grid_size], dtype=np.int32),
+        xc,
+        yc,
+        grid_size,
+        grid_size,
+        len(xc),
+    )
+    return renderImg(img, **render_args)
+
+
 def readVXSfromLoc(loc, grid_size=64, plot=0, mode="full"):
     smlm = pd.read_csv(loc, header=0)
     xc = np.array(smlm["Xc"].tolist()).astype(np.int32)
@@ -1861,3 +1883,110 @@ def plotSubs(subs, thre, n_x=5):
         plt.xticks([], [])
         plt.yticks([], [])
         visualizeSub(subs[i], thre=thre)
+
+
+## CropRegions Functions
+def saveCrop(img_path, xy, grid_size=64, ratio=10, offset=5):
+    # offset between img and loc
+    # img = cv2.imread(img_path)
+    loc = img_path[:-3] + "txt"
+    smlm = pd.read_table(loc, header=0)
+    # xyz = smlm[["Xc","Yc","Zc"]]
+    cropped = smlm.loc[
+        (xy[1] / (ratio + offset) <= smlm["Xc"])
+        & (smlm["Xc"] <= ((xy[1] + grid_size + offset)) / ratio)
+        & (xy[0] / (ratio + offset) <= smlm["Yc"])
+        & (smlm["Yc"] <= (xy[0] + grid_size + offset) / ratio)
+    ]
+    cropped.loc[:, "Xc"] = cropped["Xc"] * ratio - xy[1] - offset
+    cropped.loc[:, "Yc"] = cropped["Yc"] * ratio - xy[0] - offset
+    sub_path = (
+        "/".join(img_path.split("/")[:-1])
+        + "/sub_"
+        + img_path.split("/")[-1][:-4]
+        + "_x"
+        + str(xy[1])
+        + "_y"
+        + str(xy[0])
+        + "_grid"
+        + str(grid_size)
+    )
+    cropped.to_csv(sub_path + ".txt", index=False)
+    xc = np.array(cropped["Xc"].tolist()).astype(np.int32)
+    yc = np.array(cropped["Yc"].tolist()).astype(np.int32)
+    img = grid2D(
+        np.zeros([grid_size, grid_size], dtype=np.int32),
+        xc,
+        yc,
+        grid_size,
+        grid_size,
+        len(xc),
+    )
+    g = cv2.getGaussianKernel(3, sigma=1)
+    kernel = g * g.T
+    nimg = scipy.signal.fftconvolve(img, kernel, mode="same")
+    plt.imshow(nimg.T)
+    plt.xticks([], [])
+    plt.yticks([], [])
+    plt.savefig(
+        sub_path + ".png",
+        facecolor=None,
+        edgecolor=None,
+        bbox_inches="tight",
+        pad_inches=0.0,
+    )
+    return sub_path, nimg.T
+
+
+def saveNCrop(img_path, xys, grid_size=64, ratio=10, offset=5):
+    # offset between img and loc
+    # img = cv2.imread(img_path)
+    loc = img_path[:-3] + "txt"
+    smlm = pd.read_table(loc, header=0)
+    # xyz = smlm[["Xc","Yc","Zc"]]
+    for xy in xys:
+        cropped = smlm.loc[
+            (xy[1] / (ratio + offset) <= smlm["Xc"])
+            & (smlm["Xc"] <= ((xy[1] + grid_size + offset)) / ratio)
+            & (xy[0] / (ratio + offset) <= smlm["Yc"])
+            & (smlm["Yc"] <= (xy[0] + grid_size + offset) / ratio)
+        ]
+        cropped.loc[:, "Xc"] = cropped["Xc"] * ratio - xy[1] - offset
+        cropped.loc[:, "Yc"] = cropped["Yc"] * ratio - xy[0] - offset
+        sub_path = (
+            "/".join(img_path.split("/")[:-1])
+            + "/sub_"
+            + img_path.split("/")[-1][:-4]
+            + "_x"
+            + str(xy[1])
+            + "_y"
+            + str(xy[0])
+            + "_grid"
+            + str(grid_size)
+        )
+        # cropped.to_csv(sub_path + ".txt", index=False)
+        xc = np.array(cropped["Xc"].tolist()).astype(np.int32)
+        yc = np.array(cropped["Yc"].tolist()).astype(np.int32)
+        img = grid2D(
+            np.zeros([grid_size, grid_size], dtype=np.int32),
+            xc,
+            yc,
+            grid_size,
+            grid_size,
+            len(xc),
+        )
+        np.save(sub_path, img)
+        g = cv2.getGaussianKernel(3, sigma=1)
+        kernel = g * g.T
+        nimg = scipy.signal.fftconvolve(img, kernel, mode="same")
+        plt.imshow(nimg.T)
+        plt.xticks([], [])
+        plt.yticks([], [])
+        plt.savefig(
+            sub_path + ".png",
+            facecolor=None,
+            edgecolor=None,
+            bbox_inches="tight",
+            pad_inches=0.0,
+        )
+        plt.close('all')
