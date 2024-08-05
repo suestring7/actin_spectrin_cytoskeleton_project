@@ -540,7 +540,7 @@ def FFTfilter(
     steps=16,
     corr="Pearson",
     method="fft",
-    type=0,
+    ftype=0,
     plot=None,
     save_thre=None,
     save_name="save",
@@ -577,7 +577,7 @@ def FFTfilter(
                 kernel_size=kernel_size,
                 corr=corr,
                 method=method,
-                type=type,
+                type=ftype,
             )
             if t_conf < threshold:
                 m_conf[i, j], m_degree[i, j], m_dist[i, j] = [-1, -1, 0]
@@ -1624,7 +1624,12 @@ def readVXSfromLoc(loc, grid_size=64, plot=0, mode="full"):
     nimg = scipy.signal.fftconvolve(img, kernel, mode="same")
     if plot == 1:
         plt.imshow(nimg)
-    return lmax_loc(None, None, nimg, adapt=55, local=5, sm=3, plot=0, mode=mode)[1]
+    return lmax_loc(None, None, nimg, adapt=55, local=5, sm=3, plot=0, mode=mode)[1:]
+
+
+def readVXSfromMat(mat, grid_size=64, plot=0, mode="full"):
+    img = renderImg(mat, k_size=5, sigma=1)
+    return lmax_loc(None, None, img, adapt=55, local=5, sm=3, plot=plot, mode=mode)[1:]
 
 
 ## EM only
@@ -1816,10 +1821,23 @@ def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=
     elastic_energy = np.sum([1 / 2 * (x - relaxed_length) ** 2 for x in lengths])
     dev_60 = calAngleDev(angles, 60)
     dev_30 = calAngleDev(angles, 30)
+    all_angles = []
+    for x in angles:
+        all_angles.extend(x)
+    angle_std = np.std(all_angles)
     # v_c = Voronoi_cv(vxs)
     # v_e = Voronoi_edges(vxs)
     # tris = len(t_vxs)
-    return [n_vx, connects, length_std, p_area, elastic_energy, dev_60, dev_30]
+    return [
+        n_vx,
+        connects,
+        length_std,
+        p_area,
+        elastic_energy,
+        dev_60,
+        dev_30,
+        angle_std,
+    ]
 
 
 def histLinks(vxs, links, bins):
@@ -1989,4 +2007,4 @@ def saveNCrop(img_path, xys, grid_size=64, ratio=10, offset=5):
             bbox_inches="tight",
             pad_inches=0.0,
         )
-        plt.close('all')
+        plt.close("all")
