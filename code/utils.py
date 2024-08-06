@@ -1767,10 +1767,7 @@ def getAngle(vxs, links):
 
 def plotAngleHist(angles, bins=36, tmax=180):
     # Fixing random state for reproducibility
-    tmp = []
-    for x in angles:
-        tmp.extend(x)
-    counts = np.histogram(tmp, bins=np.linspace(0, 360, bins + 1))[0]
+    counts = np.histogram(angles, bins=np.linspace(0, 360, bins + 1))[0]
     radii = counts / np.sum(counts)
 
     # Compute pie slices
