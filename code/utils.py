@@ -14,7 +14,7 @@ import pandas as pd
 import glob
 
 import scipy
-from scipy.signal import correlate2d, fftconvolve
+from scipy.signal import correlate2d, fftconvolve, argrelextrema
 from scipy import ndimage
 from scipy.ndimage import maximum_filter
 from scipy.spatial import distance_matrix, Delaunay, Voronoi, voronoi_plot_2d
@@ -25,10 +25,12 @@ from PIL import Image
 from sklearn.manifold import TSNE
 from sklearn import metrics
 from sklearn.cluster import DBSCAN, HDBSCAN
+from sklearn.neighbors import KernelDensity
 
 import pointpats
 
 from render2D import grid2D
+
 
 
 ## 1D Functions
@@ -274,6 +276,20 @@ def sim2D(size=128, space=6):
             for y in range(ny)
         ]
     )
+
+
+def sim2Df(size=128, space=6, yoff=5):
+    #"float version"
+    nx = ny = int(size / space / 2) + 3
+    sim = [
+        [((x * 2 - y % 2) * space) + 10, (y * np.sqrt(3) * space) + yoff]
+        for x in range(nx)
+        for y in range(ny)
+    ]
+    sim2D = [
+        x for x in sim if x[0] >= 0 and x[0] <= size and x[1] >= 0 and x[1] <= size
+    ]
+    return np.array(sim2D)
 
 
 def sim2DC(size=128, space=6):
@@ -934,7 +950,7 @@ def visualize(vxs, links, p_size, thre, bins=10, text=0, **plot_args):
     y_offset = 1
     vxs = np.array(vxs)
     n_vx = len(vxs)
-    dist = distance_matrix(vxs, vxs) * 16
+    dist = distance_matrix(vxs, vxs) * p_size
     plt.plot(
         vxs[:, 0],
         vxs[:, 1],
@@ -976,6 +992,7 @@ def visualize(vxs, links, p_size, thre, bins=10, text=0, **plot_args):
             boundaries=bounds,
             format="%1i",
         )
+    plt.gca().set_aspect("equal", adjustable="datalim")
     return 1
 
 
@@ -1765,7 +1782,7 @@ def getAngle(vxs, links):
     return angles
 
 
-def plotAngleHist(angles, bins=36, tmax=180):
+def plotAngleHist(angles, bins=36, tmax=360, ax=None):
     # Fixing random state for reproducibility
     counts = np.histogram(angles, bins=np.linspace(0, 360, bins + 1))[0]
     radii = counts / np.sum(counts)
@@ -1775,13 +1792,13 @@ def plotAngleHist(angles, bins=36, tmax=180):
     width = 2 * np.pi / bins
     colors = plt.cm.viridis(radii / 10.0)
 
-    ax = plt.subplot(projection="polar")
+    if not ax:
+        ax = plt.subplot(projection="polar")
     ticks = np.linspace(0, 2 * np.pi, int(bins / 2 + 1))
     ax.set_xticks(ticks)
     ax.bar(theta, radii, width=width, bottom=0.0, color=colors, alpha=0.5)
     ax.set_thetamin(0)
     ax.set_thetamax(tmax)
-    plt.show()
 
 
 def calAngleDev(angles, dev=60, alim=90):
@@ -2005,3 +2022,18 @@ def saveNCrop(img_path, xys, grid_size=64, ratio=10, offset=5):
             pad_inches=0.0,
         )
         plt.close("all")
+
+
+## Angles direction:
+def getTop3Angle(vxs, links):
+    n_vx = len(vxs)
+    angles = []
+    for i in range(n_vx):
+        tmp_angles = []
+        for j in range(n_vx):
+            if links[i][j]:
+                tmp_angles.append(angle_of_line(vxs[i], vxs[j]))
+                #tmp_angles.append((angle_of_line(vxs[i], vxs[j])+180)%180)
+        if tmp_angles:
+            angles.extend(tmp_angles)
+    return angles
