@@ -1853,7 +1853,23 @@ def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=
         angle_std,
     ]
 
-
+def statsForNpys(npys, rrange=[5,8], thre=[0,220], pixel_size=16, title=""):
+    n_mat = len(npys)
+    fft_mat = np.zeros([n_mat,2])
+    stats_mat = []
+    for i in range(n_mat):    
+        mat = np.load(npys[i])
+        stats_mat.append(statsForMat(mat,thre=thre))
+        nimg = renderImg(mat, k_size=5, sigma=1)
+        fft_mat[i][0]=fft_filter(nimg, rrange, method="fft",corr="Spearman")[0]
+        fft_mat[i][1]=fft_filter(nimg, rrange, method="bin",corr="Spearman")[0]
+    all_mat=np.concatenate((fft_mat, np.array(stats_mat)),axis=1)
+    sns.set_theme(rc={'figure.figsize':(10,10)})
+    labels=["1D score(FFT)", "1D score(BIN)",r'$\sigma$ of Blink events',r'$\sigma$ of Molecule Cluster Size', "Density", "#Average Connections", r'$\sigma$ of links', "%Area","Elastic Energy", "Average Deviation of Angles from 60 degree", "Average Deviation of Angles from 30 degree",r'$\sigma$ of angles']
+    _=showCorr(all_mat, labels, method="spearman")
+    plt.title(title+" n="+str(n_mat))
+    return(all_mat)
+    
 def histLinks(vxs, links, bins):
     dist = distance_matrix(vxs, vxs)
     lengths = [x for x in (links * dist).flatten() if x != 0]
