@@ -20,6 +20,7 @@ from scipy.ndimage import maximum_filter
 from scipy.spatial import distance_matrix, Delaunay, Voronoi, voronoi_plot_2d
 
 import math
+from math import sqrt
 from PIL import Image
 
 from sklearn.manifold import TSNE
@@ -29,8 +30,9 @@ from sklearn.neighbors import KernelDensity
 
 import pointpats
 
-from render2D import grid2D
+from skimage.feature import blob_dog, blob_log, blob_doh
 
+from render2D import grid2D
 
 
 ## 1D Functions
@@ -279,7 +281,7 @@ def sim2D(size=128, space=6):
 
 
 def sim2Df(size=128, space=6, yoff=5):
-    #"float version"
+    # "float version"
     nx = ny = int(size / space / 2) + 3
     sim = [
         [((x * 2 - y % 2) * space) + 10, (y * np.sqrt(3) * space) + yoff]
@@ -328,7 +330,7 @@ def simRand2(size=128, n=50, thre=[187, 187]):
     return np.append(sim, np.array(sim2), axis=0)
 
 
-def simRandD(box=100, d=5, n=20):
+def simRandD(size=100, d=5, n=20):
     points = []
     i = 0
     c = 0
@@ -688,6 +690,13 @@ def autocontrast(img, thre=5):
     return img.astype(np.uint8)
 
 
+def blob(img, **blob_args):
+    blobs_log = blob_log(img, **blob_args)
+    blobs_log[:, 2] = blobs_log[:, 2] * sqrt(2)
+    vxs = blobs_log[:, ::-1][:, 1:3]
+    return vxs, blobs_log[:, 2]
+
+
 def lmax_loc(
     loc_file, regions, rimg, adapt=55, local=7, plot=0, verbose=0, sm=4, mode="full"
 ):
@@ -1038,6 +1047,9 @@ def performance(test, gt):
 def generateLinks(vxs, img=None, thre=[100, 200], plot=1):
     # first step
     n_vx = len(vxs)
+    links = np.zeros([n_vx, n_vx])
+    if n_vx <= 4:
+        return links
     tri = Delaunay(vxs)
     small_tri = [
         x
@@ -1046,7 +1058,6 @@ def generateLinks(vxs, img=None, thre=[100, 200], plot=1):
         and thre[0] <= np.linalg.norm(vxs[x[2]] - vxs[x[1]]) <= thre[1]
         and thre[0] <= np.linalg.norm(vxs[x[0]] - vxs[x[2]]) <= thre[1]
     ]
-    links = np.zeros([n_vx, n_vx])
     for x in small_tri:
         links[x[0]][x[1]] = links[x[1]][x[0]] = links[x[0]][x[2]] = links[x[2]][
             x[0]
@@ -1609,7 +1620,7 @@ def renderImg(img, k_size=3, sigma=1):
     return nimg
 
 
-def readImgfromLoc(loc, grid_size=64, plot=0, sm=3, **render_args):
+def readImgfromLoc(loc, grid_size=64, plot=0, **render_args):
     smlm = pd.read_csv(loc, header=0)
     xc = np.array(smlm["Xc"].tolist()).astype(np.int32)
     yc = np.array(smlm["Yc"].tolist()).astype(np.int32)
@@ -1624,29 +1635,31 @@ def readImgfromLoc(loc, grid_size=64, plot=0, sm=3, **render_args):
     return renderImg(img, **render_args)
 
 
-def readVXSfromLoc(loc, grid_size=64, plot=0, mode="full"):
-    smlm = pd.read_csv(loc, header=0)
-    xc = np.array(smlm["Xc"].tolist()).astype(np.int32)
-    yc = np.array(smlm["Yc"].tolist()).astype(np.int32)
-    img = grid2D(
-        np.zeros([grid_size, grid_size], dtype=np.int32),
-        xc,
-        yc,
-        grid_size,
-        grid_size,
-        len(xc),
-    )
+def readVXSfromLoc(loc, grid_size=64, plot=0, **loc_args):
+    # edit to read mat, the difference is that here it use lmax_loc instead of blob
+    # smlm = pd.read_csv(loc, header=0)
+    # xc = np.array(smlm["Xc"].tolist()).astype(np.int32)
+    # yc = np.array(smlm["Yc"].tolist()).astype(np.int32)
+    # img = grid2D(
+    #     np.zeros([grid_size, grid_size], dtype=np.int32),
+    #     xc,
+    #     yc,
+    #     grid_size,
+    #     grid_size,
+    #     len(xc),
+    # )
+    img = np.load(loc)
     g = cv2.getGaussianKernel(3, sigma=1)
     kernel = g * g.T
     nimg = scipy.signal.fftconvolve(img, kernel, mode="same")
     if plot == 1:
         plt.imshow(nimg)
-    return lmax_loc(None, None, nimg, adapt=55, local=5, sm=3, plot=0, mode=mode)[1:]
+    return lmax_loc(None, None, nimg, adapt=55, local=5, sm=3, plot=0, **loc_args)[1:]
 
 
-def readVXSfromMat(mat, grid_size=64, plot=0, mode="full"):
-    img = renderImg(mat, k_size=5, sigma=1)
-    return lmax_loc(None, None, img, adapt=55, local=5, sm=3, plot=plot, mode=mode)[1:]
+# def readVXSfromMat(mat, grid_size=64, plot=0, mode="full"):
+#     img = renderImg(mat, k_size=5, sigma=1)
+#     return lmax_loc(None, None, img, adapt=55, local=5, sm=3, plot=plot, mode=mode)[1:]
 
 
 ## EM only
@@ -1826,15 +1839,17 @@ def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=
     tri_list = getTrianglesFromList(convertMatrix2List(links))
     # t_vxs = getTrianglesCentroid(tri_list, vxs)
     dist = distance_matrix(vxs, vxs)
-    lengths = [x for x in (links * dist).flatten() if x != 0]
-
-    length_std = np.std(lengths)
+    linked_dist = links * dist
+    lengths = [[x for x in y if x != 0] for y in linked_dist]
+    mean_length_std = np.mean([np.std(x) for x in lengths])
+    length_std = np.std([x for x in linked_dist.flatten() if x != 0])
     x0, y0 = np.min(vxs, 0)
     x1, y1 = np.max(vxs, 0)
     p_area = AreaCoveredByTriangles(tri_list, vxs) / (y1 - y0) / (x1 - x0)
     elastic_energy = np.sum([1 / 2 * (x - relaxed_length) ** 2 for x in lengths])
     dev_60 = calAngleDev(angles, 60)
     dev_30 = calAngleDev(angles, 30)
+    mean_angle_std = np.mean([np.std(x) for x in angles])
     all_angles = []
     for x in angles:
         all_angles.extend(x)
@@ -1846,30 +1861,71 @@ def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=
         n_vx,
         connects,
         length_std,
+        mean_length_std,
         p_area,
         elastic_energy,
         dev_60,
         dev_30,
         angle_std,
+        mean_angle_std,
     ]
 
-def statsForNpys(npys, rrange=[5,8], thre=[0,220], pixel_size=16, title=""):
+
+def readVXSfromMat(mat, grid_size=64, plot=0, **cluster_args):
+    img = renderImg(mat, k_size=5, sigma=1)
+    vxs, r = blob(img, **cluster_args)
+    if plot == 1:
+        ax = plt.subplots(111)
+        plt.imshow(img)
+        for i in range(len(vxs)):
+            c = plt.Circle(
+                (vxs[i, 0], vxs[i, 1]), r[i], color="red", linewidth=2, fill=False
+            )
+            ax.add_patch(c)
+        ax.set_axis_off()
+    return vxs, r
+
+
+def statsForMat(mat, pixel_size=16, thre=[0, 220], **cluster_args):
+    vxs, std_ill, std_size = readVXSfromMat(mat, **cluster_args)
+    stats = [std_ill, std_size]
+    stats.extend(statsForVXS(vxs * pixel_size, thre=thre))
+    return stats
+
+
+def statsForNpys(
+    npys, rrange=[5, 8], thre=[0, 220], pixel_size=16, title="", **cluster_args
+):
     n_mat = len(npys)
-    fft_mat = np.zeros([n_mat,2])
+    fft_mat = np.zeros([n_mat, 2])
     stats_mat = []
-    for i in range(n_mat):    
+    for i in range(n_mat):
         mat = np.load(npys[i])
-        stats_mat.append(statsForMat(mat,thre=thre))
+        stats_mat.append(statsForMat(mat, thre=thre, **cluster_args))
         nimg = renderImg(mat, k_size=5, sigma=1)
-        fft_mat[i][0]=fft_filter(nimg, rrange, method="fft",corr="Spearman")[0]
-        fft_mat[i][1]=fft_filter(nimg, rrange, method="bin",corr="Spearman")[0]
-    all_mat=np.concatenate((fft_mat, np.array(stats_mat)),axis=1)
-    sns.set_theme(rc={'figure.figsize':(10,10)})
-    labels=["1D score(FFT)", "1D score(BIN)",r'$\sigma$ of Blink events',r'$\sigma$ of Molecule Cluster Size', "Density", "#Average Connections", r'$\sigma$ of links', "%Area","Elastic Energy", "Average Deviation of Angles from 60 degree", "Average Deviation of Angles from 30 degree",r'$\sigma$ of angles']
-    _=showCorr(all_mat, labels, method="spearman")
-    plt.title(title+" n="+str(n_mat))
-    return(all_mat)
-    
+        fft_mat[i][0] = fft_filter(nimg, rrange, method="fft", corr="Spearman")[0]
+        fft_mat[i][1] = fft_filter(nimg, rrange, method="bin", corr="Spearman")[0]
+    all_mat = np.concatenate((fft_mat, np.array(stats_mat)), axis=1)
+    sns.set_theme(rc={"figure.figsize": (10, 10)})
+    labels = [
+        "1D score(FFT)",
+        "1D score(BIN)",
+        r"$\sigma$ of Blink events",
+        r"$\sigma$ of Molecule Cluster Size",
+        "Density",
+        "#Average Connections",
+        r"$\sigma$ of links",
+        "%Area",
+        "Elastic Energy",
+        "Average Deviation of Angles from 60 degree",
+        "Average Deviation of Angles from 30 degree",
+        r"$\sigma$ of angles",
+    ]
+    _ = showCorr(all_mat, labels, method="spearman")
+    plt.title(title + " n=" + str(n_mat))
+    return all_mat
+
+
 def histLinks(vxs, links, bins):
     dist = distance_matrix(vxs, vxs)
     lengths = [x for x in (links * dist).flatten() if x != 0]
@@ -2049,7 +2105,7 @@ def getTop3Angle(vxs, links):
         for j in range(n_vx):
             if links[i][j]:
                 tmp_angles.append(angle_of_line(vxs[i], vxs[j]))
-                #tmp_angles.append((angle_of_line(vxs[i], vxs[j])+180)%180)
+                # tmp_angles.append((angle_of_line(vxs[i], vxs[j])+180)%180)
         if tmp_angles:
             angles.extend(tmp_angles)
     return angles
