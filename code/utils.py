@@ -35,6 +35,15 @@ from skimage.feature import blob_dog, blob_log, blob_doh
 from render2D import grid2D
 
 
+def ccw(A, B, C):
+    return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+
+
+# Return true if line segments AB and CD intersect
+def intersect(A, B, C, D):
+    return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)
+
+
 ## 1D Functions
 def iFFT(ft):
     ft = np.fft.ifftshift(ft)
@@ -335,7 +344,7 @@ def simRandD(size=100, d=5, n=20):
     i = 0
     c = 0
     while i < n and c < 20:
-        t_vx = np.random.rand(2) * box
+        t_vx = np.random.rand(2) * size
         t_flag = 1
         for vx in points:
             if np.linalg.norm(t_vx - vx) < d:
@@ -923,8 +932,7 @@ def convertMatrix2List(links):
     return link_list
 
 
-def convertList2Matrix(link_list):
-    n_vx = np.max(sum(link_list, [])) + 1
+def convertList2Matrix(link_list, n_vx):
     links = np.zeros([n_vx, n_vx])
     for link in link_list:
         links[link[0]][link[1]] = links[link[1]][link[0]] = 1
@@ -1044,25 +1052,34 @@ def performance(test, gt):
     return (accuracy, precision, recall)
 
 
-def generateLinks(vxs, img=None, thre=[100, 200], plot=1):
+def generateLinks(vxs, img=None, thre=[100, 200], plot=1, mode=0):
     # first step
     n_vx = len(vxs)
     links = np.zeros([n_vx, n_vx])
     if n_vx <= 4:
         return links
     tri = Delaunay(vxs)
-    small_tri = [
-        x
-        for x in tri.simplices
-        if thre[0] <= np.linalg.norm(vxs[x[0]] - vxs[x[1]]) <= thre[1]
-        and thre[0] <= np.linalg.norm(vxs[x[2]] - vxs[x[1]]) <= thre[1]
-        and thre[0] <= np.linalg.norm(vxs[x[0]] - vxs[x[2]]) <= thre[1]
-    ]
-    for x in small_tri:
-        links[x[0]][x[1]] = links[x[1]][x[0]] = links[x[0]][x[2]] = links[x[2]][
-            x[0]
-        ] = links[x[1]][x[2]] = links[x[2]][x[1]] = 1
-    if plot:
+    if mode == 0:
+        small_tri = [
+            x
+            for x in tri.simplices
+            if thre[0] <= np.linalg.norm(vxs[x[0]] - vxs[x[1]]) <= thre[1]
+            and thre[0] <= np.linalg.norm(vxs[x[2]] - vxs[x[1]]) <= thre[1]
+            and thre[0] <= np.linalg.norm(vxs[x[0]] - vxs[x[2]]) <= thre[1]
+        ]
+        for x in small_tri:
+            links[x[0]][x[1]] = links[x[1]][x[0]] = links[x[0]][x[2]] = links[x[2]][
+                x[0]
+            ] = links[x[1]][x[2]] = links[x[2]][x[1]] = 1
+    elif mode == 1:
+        for x in tri.simplices:
+            if thre[0] <= np.linalg.norm(vxs[x[0]] - vxs[x[1]]) <= thre[1]:
+                links[x[0]][x[1]] = links[x[1]][x[0]] = 1
+            if thre[0] <= np.linalg.norm(vxs[x[2]] - vxs[x[1]]) <= thre[1]:
+                links[x[2]][x[1]] = links[x[1]][x[2]] = 1
+            if thre[0] <= np.linalg.norm(vxs[x[0]] - vxs[x[2]]) <= thre[1]:
+                links[x[0]][x[2]] = links[x[2]][x[0]] = 1
+    if plot == 1:
         plt.figure(figsize=[10, 10])
         if img:
             plt.imshow(img)
@@ -1857,6 +1874,37 @@ def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=
     # v_c = Voronoi_cv(vxs)
     # v_e = Voronoi_edges(vxs)
     # tris = len(t_vxs)
+
+    angles = getTop3Angle(vxs, links)
+    angles = np.array(angles).reshape(-1, 1)
+    kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(angles)
+    s = np.linspace(-180, 180, 361)
+    probs = kde.score_samples(s.reshape(-1, 1))
+
+    l_min, l_max = argrelextrema(probs, np.less)[0], argrelextrema(probs, np.greater)[0]
+    # print(l_max)
+    peaks_idx = [x for x in l_max if x < l_max[1] + 180][1:]
+    # print(peaks_idx)
+    n_peak = len(peaks_idx)
+    peaks_prob = [probs[x] for x in peaks_idx]
+    highest_peak = max(peaks_prob)
+    peaks_angle = [peaks_idx[x] for x in np.argsort(peaks_prob)[-3:][::-1]]
+    if n_peak == 1:
+        main_angle = 180
+        largest_angle = 180
+        std_angles = 0
+    else:
+        main_angle = (
+            np.abs(peaks_angle[1] - peaks_angle[0])
+            if np.abs(peaks_angle[1] - peaks_angle[0]) <= 90
+            else 180 - np.abs(peaks_angle[1] - peaks_angle[0])
+        )
+        angles = np.sort(peaks_angle)
+        angles = np.concatenate(
+            (angles[1:] - angles[:-1], [180 - np.sum(angles[1:] - angles[:-1])])
+        )
+        largest_angle = np.max(angles)
+        std_angles = np.std(angles)
     return [
         n_vx,
         connects,
@@ -1868,6 +1916,11 @@ def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=
         dev_30,
         angle_std,
         mean_angle_std,
+        n_peak,
+        main_angle,
+        highest_peak,
+        largest_angle,
+        std_angles,
     ]
 
 
