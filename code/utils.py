@@ -34,6 +34,23 @@ from skimage.feature import blob_dog, blob_log, blob_doh
 
 from render2D import grid2D
 
+from matplotlib.colors import ListedColormap
+
+from sklearn.datasets import make_circles, make_classification, make_moons
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
+from sklearn.gaussian_process import GaussianProcessClassifier
+from sklearn.gaussian_process.kernels import RBF
+from sklearn.inspection import DecisionBoundaryDisplay
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+
 
 def ccw(A, B, C):
     return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
@@ -943,7 +960,7 @@ def getTrianglesFromList(link_list):
     if len(link_list) == 0:
         return []
     n_vx = np.max(sum(link_list, [])) + 1
-    links = convertList2Matrix(link_list)
+    links = convertList2Matrix(link_list, n_vx)
     tri_list = []
     for link in link_list:
         for i in range(n_vx):
@@ -1858,15 +1875,16 @@ def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=
     dist = distance_matrix(vxs, vxs)
     linked_dist = links * dist
     lengths = [[x for x in y if x != 0] for y in linked_dist]
-    mean_length_std = np.mean([np.std(x) for x in lengths])
-    length_std = np.std([x for x in linked_dist.flatten() if x != 0])
+    mean_length_std = np.mean([np.std(x) for x in lengths if len(x) > 1])
+    lengths = [x for x in linked_dist.flatten() if x != 0]
+    length_std = np.std(lengths)
     x0, y0 = np.min(vxs, 0)
     x1, y1 = np.max(vxs, 0)
     p_area = AreaCoveredByTriangles(tri_list, vxs) / (y1 - y0) / (x1 - x0)
     elastic_energy = np.sum([1 / 2 * (x - relaxed_length) ** 2 for x in lengths])
     dev_60 = calAngleDev(angles, 60)
     dev_30 = calAngleDev(angles, 30)
-    mean_angle_std = np.mean([np.std(x) for x in angles])
+    mean_angle_std = np.mean([np.std(x) for x in angles if len(x) > 1])
     all_angles = []
     for x in angles:
         all_angles.extend(x)
@@ -1924,11 +1942,12 @@ def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=
     ]
 
 
-def readVXSfromMat(mat, grid_size=64, plot=0, **cluster_args):
+def readVXSfromMat(mat, grid_size=64, plot=0, ax=None, **cluster_args):
     img = renderImg(mat, k_size=5, sigma=1)
     vxs, r = blob(img, **cluster_args)
     if plot == 1:
-        ax = plt.subplots(111)
+        if not ax:
+            ax = plt.gca()
         plt.imshow(img)
         for i in range(len(vxs)):
             c = plt.Circle(
@@ -2162,3 +2181,69 @@ def getTop3Angle(vxs, links):
         if tmp_angles:
             angles.extend(tmp_angles)
     return angles
+
+
+
+
+def testAllClass(X, y, vxss=None, thre=[50,280], methods=[6,9], debug=0, n_debug=10):
+    names = [
+        "Nearest Neighbors",
+        "Linear SVM",
+        "RBF SVM",
+        "Gaussian Process",
+        "Decision Tree",
+        "Random Forest",
+        "Neural Net",
+        "AdaBoost",
+        "Naive Bayes",
+        "QDA",
+    ]
+
+    classifiers = [
+        KNeighborsClassifier(5),
+        SVC(kernel="linear", C=0.025, random_state=42),
+        SVC(gamma=2, C=1, random_state=42),
+        GaussianProcessClassifier(1.0 * RBF(1.0), random_state=42),
+        DecisionTreeClassifier(max_depth=5, random_state=42),
+        RandomForestClassifier(
+            max_depth=5, n_estimators=10, max_features=7, random_state=42
+        ),
+        MLPClassifier(alpha=1, max_iter=1000, random_state=42),
+        AdaBoostClassifier(algorithm="SAMME", random_state=42),
+        GaussianNB(),
+        QuadraticDiscriminantAnalysis(),
+    ]
+
+    # X = X_data
+    # y = y_data
+    X_train, X_test, y_train, y_test , idx_train, idx_test= train_test_split(
+            np.nan_to_num(X), y, np.arange(len(y)), test_size=0.4, random_state=42
+    )
+
+    scores = np.zeros(len(methods))
+    seperate_accuracy = np.zeros([len(methods),len(np.unique(y))])
+    for i, (name, clf) in enumerate(zip([names[x] for x in methods], [classifiers[x] for x in methods])):
+        # ax = plt.subplot(1, len(classifiers) + 1, i)
+        clf = make_pipeline(StandardScaler(), clf)
+        clf.fit(X_train, y_train)
+        scores[i]=clf.score(X_test, y_test)
+        y_pred = clf.predict(X_test)
+        for j, label in enumerate(np.unique(y)):
+            seperate_accuracy[i, j] = np.mean([ 1 if y_pred[k]==y_test[k] else 0 for k in range(len(y_test)) if y_test[k]==label ])
+            if debug == 1:
+                print("Accuracy for "+str(int(label)) +": "+"{:.2f}".format(seperate_accuracy[i,j]))
+        if debug == 1:
+            incorrect = [ k for k in range(len(y_test)) if y_test[k]!=y_pred[k] ]
+            #plt.subplots(round(n_debug/5),5)
+            n_y = round(n_debug/5)
+            plt.figure(figsize = (10, 2*n_y))
+            for ki, k in enumerate(np.random.choice(incorrect,min(len(incorrect),n_debug),False)):
+                plt.subplot(n_y, 5, ki+1)
+                vxs = vxss[idx_test[k]]
+                links = generateLinks(vxs*16, thre=thre, plot=0)
+                visualize(vxs,links,thre=thre,p_size=16)
+                plt.xticks([], [])
+                plt.yticks([], [])
+                plt.title(str(int(y_test[k]))+" mis as "+str(int(y_pred[k])))
+            plt.suptitle(name+" Error Examples:")
+    return scores, seperate_accuracy, np.unique(y)
