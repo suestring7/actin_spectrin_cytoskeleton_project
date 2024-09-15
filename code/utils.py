@@ -1778,13 +1778,19 @@ def sum_line_cnct(img, p0, p1):
 
 ## Simulation functions
 def jitter(vxs, rand=0, loss=0, noise=0):
+    def jitter_theta(vx, rand, theta):
+        return [
+            vx[0] + rand * np.cos(theta),
+            vx[1] + rand * np.sin(theta),
+        ]
+
     if rand:
+
         vxs = np.array(
             [
-                [
-                    x[0] + (np.random.rand() - 0.5) * rand,
-                    x[1] + (np.random.rand() - 0.5) * rand,
-                ]
+                jitter_theta(
+                    x, np.sqrt(np.random.rand()) * rand, np.random.rand() * 2 * np.pi
+                )
                 for x in vxs
             ]
         )
@@ -1856,7 +1862,9 @@ def calAngleDev(angles, dev=60, alim=90):
     return np.mean(devs)
 
 
-def statsForVXS(vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, plot=0):
+def statsForVXS(
+    vxs, thre=[150, 220], mode=1, std=187, relaxed_length=100, bandwidth=12, plot=0
+):
     # use density and connectivity as rules for simulating data
     # connectivity
     # uniformity: distance to the mean length
@@ -2183,9 +2191,7 @@ def getTop3Angle(vxs, links):
     return angles
 
 
-
-
-def testAllClass(X, y, vxss=None, thre=[50,280], methods=[6,9], debug=0, n_debug=10):
+def testAllClass(X, y, vxss=None, thre=[50, 280], methods=[6, 9], debug=0, n_debug=10):
     names = [
         "Nearest Neighbors",
         "Linear SVM",
@@ -2216,34 +2222,40 @@ def testAllClass(X, y, vxss=None, thre=[50,280], methods=[6,9], debug=0, n_debug
 
     # X = X_data
     # y = y_data
-    X_train, X_test, y_train, y_test , idx_train, idx_test= train_test_split(
-            np.nan_to_num(X), y, np.arange(len(y)), test_size=0.4, random_state=42
+    X_train, X_test, y_train, y_test, idx_train, idx_test = train_test_split(
+        np.nan_to_num(X), y, np.arange(len(y)), test_size=0.4, random_state=42
     )
 
     scores = np.zeros(len(methods))
-    seperate_accuracy = np.zeros([len(methods),len(np.unique(y))])
-    for i, (name, clf) in enumerate(zip([names[x] for x in methods], [classifiers[x] for x in methods])):
+    seperate_accuracy = np.zeros([len(methods), len(np.unique(y)), len(np.unique(y))])
+    for i, (name, clf) in enumerate(
+        zip([names[x] for x in methods], [classifiers[x] for x in methods])
+    ):
         # ax = plt.subplot(1, len(classifiers) + 1, i)
         clf = make_pipeline(StandardScaler(), clf)
         clf.fit(X_train, y_train)
-        scores[i]=clf.score(X_test, y_test)
+        scores[i] = clf.score(X_test, y_test)
         y_pred = clf.predict(X_test)
-        for j, label in enumerate(np.unique(y)):
-            seperate_accuracy[i, j] = np.mean([ 1 if y_pred[k]==y_test[k] else 0 for k in range(len(y_test)) if y_test[k]==label ])
-            if debug == 1:
-                print("Accuracy for "+str(int(label)) +": "+"{:.2f}".format(seperate_accuracy[i,j]))
+        lbl = np.unique(y)
+        for j, y_k in enumerate(y_test):
+            seperate_accuracy[i, lbl.index(y_k), lbl.index(y_pred[j])] += 1
+
+        for j in range(len(lbl)):
+            seperate_accuracy[i, j, :] /= np.sum(seperate_accuracy[i, j, :])
         if debug == 1:
-            incorrect = [ k for k in range(len(y_test)) if y_test[k]!=y_pred[k] ]
-            #plt.subplots(round(n_debug/5),5)
-            n_y = round(n_debug/5)
-            plt.figure(figsize = (10, 2*n_y))
-            for ki, k in enumerate(np.random.choice(incorrect,min(len(incorrect),n_debug),False)):
-                plt.subplot(n_y, 5, ki+1)
+            incorrect = [k for k in range(len(y_test)) if y_test[k] != y_pred[k]]
+            # plt.subplots(round(n_debug/5),5)
+            n_y = round(n_debug / 5)
+            plt.figure(figsize=(10, 2 * n_y))
+            for ki, k in enumerate(
+                np.random.choice(incorrect, min(len(incorrect), n_debug), False)
+            ):
+                plt.subplot(n_y, 5, ki + 1)
                 vxs = vxss[idx_test[k]]
-                links = generateLinks(vxs*16, thre=thre, plot=0)
-                visualize(vxs,links,thre=thre,p_size=16)
+                links = generateLinks(vxs * 16, thre=thre, plot=0)
+                visualize(vxs, links, thre=thre, p_size=16)
                 plt.xticks([], [])
                 plt.yticks([], [])
-                plt.title(str(int(y_test[k]))+" mis as "+str(int(y_pred[k])))
-            plt.suptitle(name+" Error Examples:")
-    return scores, seperate_accuracy, np.unique(y)
+                plt.title(str(int(y_test[k])) + " mis as " + str(int(y_pred[k])))
+            plt.suptitle(name + " Error Examples:")
+    return scores, seperate_accuracy, lbl
